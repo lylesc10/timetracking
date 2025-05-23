@@ -3,4 +3,7 @@
 *.xls
 *.cfg
 Dockerfile
-
+bin/
+include/
+lib/ 
+share/

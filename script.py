@@ -2,16 +2,48 @@ import pandas as pd
 import sys
 import os
 from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Alignment
 from openpyxl.chart import BarChart, Reference
 import tkinter as tk
 from tkinter import messagebox, filedialog
+from PIL import Image, ImageTk
+import matplotlib.pyplot as plt
 
 #to do : 
 # - docker container 
 # - github page 
 
 def create_gui():
+    file_data = []
+    current_index = [0]
+
+    def update_display():
+        if not file_data:
+            listbox.delete(0, tk.END)
+            chart_label.config(image='', text="No data loaded")
+            return
+        data = file_data[current_index[0]]
+        df = data['df']
+        filename = data['filename']
+        # Update listbox
+        listbox.delete(0, tk.END)
+        listbox.insert(tk.END, f"File: {os.path.basename(filename)}")
+        listbox.insert(tk.END, "Comment Summary:")
+        for index, row in df.iterrows():
+            listbox.insert(tk.END, f"  - {row['Comment']}: {row['Total Hours']}")
+        # Update chart
+        display_chart(df)
+
+    def prev_file():
+        if file_data:
+            current_index[0] = (current_index[0] - 1) % len(file_data)
+            update_display()
+
+    def next_file():
+        if file_data:
+            current_index[0] = (current_index[0] + 1) % len(file_data)
+            update_display()
+
     def process_files():
         # Open a file dialog to select Excel files
         files = filedialog.askopenfilenames(
@@ -21,9 +53,11 @@ def create_gui():
         if not files:
             return  # If no files are selected, do nothing
 
+        file_data.clear()  # Clear previous data
         # Clear the listbox before displaying new column labels
         listbox.delete(0, tk.END)
 
+        df = pd.DataFrame() 
         for file in files:
             if file.lower().endswith(('.xlsx', '.xls')):
                 try:
@@ -34,7 +68,7 @@ def create_gui():
                     base_name = os.path.splitext(file)[0]
                     output_file_path = f"{base_name}_sorted.xlsx"
                     df = pd.read_excel(output_file_path, sheet_name="Comment Summary")
-
+                    file_data.append({'df': df, 'filename': file})
                     # Display the content of the second sheet in the listbox
                     listbox.insert(tk.END, f"File: {os.path.basename(output_file_path)}")
                     listbox.insert(tk.END, "Comment Summary:")
@@ -46,7 +80,8 @@ def create_gui():
                     messagebox.showerror("Error", f"Failed to process file: {file}\n{str(e)}")
             else:
                 messagebox.showwarning("Invalid File", f"Skipped non-Excel file: {file}")
-
+        current_index[0] = 0
+        update_display()
     # Create the main window
     root = tk.Tk()
     root.title("Excel File Processor")
@@ -63,6 +98,17 @@ def create_gui():
     button = tk.Button(root, text="Select Files", command=process_files, font=("Arial", 12))
     button.pack(pady=10)
 
+    global chart_label
+    chart_label = tk.Label(root, text="Bar Chart of Total Hours per Unique Comment")
+    chart_label.pack(pady=10)
+
+    nav_frame = tk.Frame(root)
+    nav_frame.pack(pady=5)
+    prev_btn = tk.Button(nav_frame, text="Previous File", command=prev_file)
+    prev_btn.pack(side=tk.LEFT, padx=5)
+    next_btn = tk.Button(nav_frame, text="Next File", command=next_file)
+    next_btn.pack(side=tk.LEFT, padx=5)
+
     # Add a listbox to display the content of the second sheet
     listbox_label = tk.Label(root, text="Content from the 'Comment Summary' Sheet:", font=("Arial", 12))
     listbox_label.pack(pady=5)
@@ -71,6 +117,27 @@ def create_gui():
 
     # Run the GUI event loop
     root.mainloop()
+
+
+
+def display_chart(df):
+        # Generate a bar chart using matplotlib
+        plt.figure(figsize=(8, 6))
+        plt.bar(df['Comment'], df['Total Hours'], color='skyblue')
+        plt.title('Total Hours per Unique Comment')
+        plt.xlabel('Comment')
+        plt.ylabel('Total Hours')
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+        plt.savefig("chart.png")
+        plt.close()
+
+        # Load and display the image in the GUI
+        img = Image.open("chart.png")
+        img = img.resize((600, 400), Image.Resampling.LANCZOS)
+        img_tk = ImageTk.PhotoImage(img)
+        chart_label.config(image=img_tk)
+        chart_label.image = img_tk
 
 def format_training_time(input_file):
     # Get file type
@@ -137,6 +204,7 @@ def format_training_time(input_file):
         comment_hours_df = comment_hours_df[comment_hours_df["Comment"] != ""]
         comment_hours_df = comment_hours_df.sort_values(by="Total Hours", ascending=False)
         comment_hours_df.to_excel(writer, index=False, sheet_name="Comment Summary")
+        display_chart(comment_hours_df)
 
     # Reopen with openpyxl to style headers and add image
     wb = load_workbook(output_file_path)
@@ -146,6 +214,29 @@ def format_training_time(input_file):
     green_fill = PatternFill(start_color="459452", end_color="459452", fill_type="solid")
     for cell in ws[1]:
         cell.fill = green_fill
+
+    # Merge cells in the Supervisor Name column that have the same value
+    supervisor_col = 1  # Assuming Supervisor Name is column A (1-indexed)
+    start_row = 2       # Data starts from row 2 (row 1 is header)
+    end_row = ws.max_row
+
+    current_supervisor = ws.cell(row=start_row, column=supervisor_col).value
+    merge_start = start_row
+
+    for row in range(start_row + 1, end_row + 1):
+        cell_value = ws.cell(row=row, column=supervisor_col).value
+        if cell_value != current_supervisor:
+            if row - 1 > merge_start:
+                ws.merge_cells(start_row=merge_start, start_column=supervisor_col,
+                            end_row=row - 1, end_column=supervisor_col)
+                ws.cell(row=merge_start, column=supervisor_col).alignment = Alignment(horizontal="center", vertical="center")
+            current_supervisor = cell_value
+            merge_start = row
+    # Merge the last group
+    if end_row > merge_start:
+        ws.merge_cells(start_row=merge_start, start_column=supervisor_col,
+                    end_row=end_row, end_column=supervisor_col)
+        ws.cell(row=merge_start, column=supervisor_col).alignment = Alignment(horizontal="center", vertical="center")
 
     # Insert Excel-generated bar chart in Comment Summary
     comment_ws = wb["Comment Summary"]
@@ -185,6 +276,7 @@ def format_training_time(input_file):
     chart.set_categories(categories)
     comment_ws.add_chart(chart, "D1")
 
+    #display_chart(comment_hours_df)
     # Save final workbook
     wb.save(output_file_path)
     print(f"Sorted the excel file and saved it as '{output_file_path}'")
